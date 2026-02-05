@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>JANGAN KEJAR AKU</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Courier New', Courier, monospace; }
+        
+        /* UI HUD */
+        #ui { position: absolute; top: 20px; left: 20px; color: #fff; pointer-events: none; z-index: 10; text-shadow: 2px 2px #000; }
+        #minimap {
+            position: absolute; bottom: 20px; right: 20px;
+            width: 200px; height: 200px;
+            border: 2px solid #666; background: rgba(0,0,0,0.8);
+            border-radius: 5px; overflow: hidden;
+        }
+        #p-dot { position: absolute; width: 8px; height: 8px; border-radius: 50%; background: #00ff00; box-shadow: 0 0 5px #0f0; z-index: 10; }
+        .wall-ui { position: absolute; background: #444; }
+        .obj-ui { position: absolute; width: 4px; height: 4px; background: #ffff00; border-radius: 50%; box-shadow: 0 0 3px #ff0; z-index: 5; }
+        #battery-container { width: 200px; height: 15px; background: #222; border: 2px solid #fff; margin-top: 5px; }
+        #battery-bar { width: 100%; height: 100%; background: #00ff00; transition: background 0.3s; }
+
+        /* Overlay Screens */
+        .overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; flex-direction: column; justify-content: center;
+            align-items: center; text-align: center; z-index: 100; color: white;
+        }
+        #start-screen { background: radial-gradient(circle, #1a1a1a 0%, #000 100%); }
+        #death-screen { background: rgba(80, 0, 0, 0.9); display: none; }
+        #pause-screen { background: rgba(0, 0, 0, 0.5); display: none; pointer-events: none; }
+
+        button {
+            padding: 15px 50px; font-size: 22px; cursor: pointer;
+            background: #000; color: #ffcc00; border: 2px solid #ffcc00;
+            font-weight: bold; border-radius: 5px; text-transform: uppercase;
+            letter-spacing: 2px; transition: all 0.3s ease;
+            box-shadow: 0 0 10px rgba(255, 204, 0, 0.2);
+            animation: pulseGlow 2s infinite;
+        }
+
+        button:hover {
+            background: #ffcc00; color: #000;
+            box-shadow: 0 0 30px #ffcc00, 0 0 50px #ffcc00;
+            transform: scale(1.05);
+        }
+
+        @keyframes pulseGlow {
+            0% { box-shadow: 0 0 5px rgba(255, 204, 0, 0.4); }
+            50% { box-shadow: 0 0 20px rgba(255, 204, 0, 0.8); }
+            100% { box-shadow: 0 0 5px rgba(255, 204, 0, 0.4); }
+        }
+
+        h1 { font-size: 50px; margin-bottom: 10px; color: #ff3333; text-shadow: 0 0 20px #ff0000; }
+        p { margin-bottom: 30px; opacity: 0.8; }
+    </style>
+</head>
+<body>
+
+    <div id="start-screen" class="overlay">
+        <h1>JANGAN KEJAR AKU!</h1>
+        <p>MISI = KUMPULKAN 10 INTI SUPAYA PARA HANTU MENGHILANG!<br>Gunakan (WASD) untuk bergerak.<br>Gunakan Senter(F) untuk melawan para hantu.<br>Selamat berjuang!</p>
+        <button id="btn-start">MULAI PERTEMPURAN</button>
+    </div>
+
+    <div id="pause-screen" class="overlay">
+        <h1 style="color: #fff; text-shadow: none;">GAME PAUSED</h1>
+        <p>Klik layar untuk lanjut</p>
+    </div>
+
+    <div id="death-screen" class="overlay">
+        <h1>ANDA MATI!</h1>
+        <button onclick="location.reload()">JANGAN SUREND BANG!</button>
+    </div>
+
+    <div id="ui">
+        <h2>Tekan Esc untuk PAUSE</h2>
+        <h2 id="score">KUMPULKAN INTI: 0/10</h2>
+        <div id="battery-container"><div id="battery-bar"></div></div>
+    </div>
+
+    <div id="minimap"><div id="p-dot"></div></div>
+
+    <script type="importmap">
+        { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        // --- AUDIO SYSTEM ---
+        let audioCtx;
+        let heartNext = 0;
+
+        function initAudio() {
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+        }
+
+        function playHeart(vol, rate) {
+            if (!audioCtx || audioCtx.currentTime < heartNext) return;
+            const osc = audioCtx.createOscillator();
+            const g = audioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(50, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.12);
+            g.gain.setValueAtTime(vol * 0.6, audioCtx.currentTime);
+            g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.12);
+            osc.connect(g); g.connect(audioCtx.destination);
+            osc.start(); osc.stop(audioCtx.currentTime + 0.12);
+            heartNext = audioCtx.currentTime + rate;
+        }
+
+        function playClick() {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const g = audioCtx.createGain();
+            osc.type = 'square';
+            osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+            g.gain.setValueAtTime(0.05, audioCtx.currentTime);
+            g.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.05);
+            osc.connect(g); g.connect(audioCtx.destination);
+            osc.start(); osc.stop(audioCtx.currentTime + 0.05);
+        }
+
+        function playScream() {
+            if (!audioCtx) return;
+            // Kita pakai 3 Oscillator sekaligus biar suaranya "pecah" dan serem
+            [400, 415, 430].forEach(freq => {
+                const osc = audioCtx.createOscillator();
+                const g = audioCtx.createGain();
+                
+                osc.type = 'sawtooth'; // Suara kasar
+                osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+                
+                // Efek suara melengking yang bergetar cepat
+                osc.frequency.exponentialRampToValueAtTime(freq * 2, audioCtx.currentTime + 0.1);
+                osc.frequency.exponentialRampToValueAtTime(10, audioCtx.currentTime + 0.8);
+                
+                g.gain.setValueAtTime(0.2, audioCtx.currentTime);
+                g.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.8);
+                
+                osc.connect(g);
+                g.connect(audioCtx.destination);
+                
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.8);
+            });
+        }
+
+        // --- GAME ENGINE ---
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.Fog(0x1a1a1a, 5, 60);
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        let score = 0, isDead = false, gameStarted = false;
+        let energy = 100, flashlightOn = false, shakeAmount = 0;
+
+        const mazeLayout = [
+            [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+            [1,2,0,0,1,0,0,0,0,1,0,3,0,0,0,0,0,0,3,1],
+            [1,1,1,0,1,0,1,1,0,1,0,1,1,1,1,1,0,1,1,1],
+            [1,0,0,0,0,3,1,0,0,0,0,0,0,3,0,1,0,0,0,1],
+            [1,0,1,1,1,1,1,0,1,1,1,1,1,1,0,1,1,1,0,1],
+            [1,3,1,0,0,0,0,0,1,3,0,0,0,1,0,0,0,1,0,1],
+            [1,0,1,0,1,1,1,1,1,0,1,1,0,1,1,1,0,1,0,1],
+            [1,0,0,0,1,0,0,0,0,0,1,0,0,0,0,1,0,1,3,1],
+            [1,1,1,0,1,0,1,1,1,1,1,0,1,1,0,1,0,1,1,1],
+            [1,3,0,0,0,0,1,0,0,3,0,0,1,0,0,0,0,0,0,1],
+            [1,1,1,1,1,0,1,1,1,1,1,1,1,0,1,1,1,1,0,1],
+            [1,0,0,3,1,0,0,0,0,1,0,0,0,0,1,3,0,0,0,1],
+            [1,0,1,1,1,1,1,1,0,1,0,1,1,1,1,1,1,1,0,1],
+            [1,0,0,0,0,0,0,1,0,1,0,0,0,0,0,0,0,1,0,1],
+            [1,1,1,1,0,1,0,1,0,1,1,1,1,1,0,1,0,1,0,1],
+            [1,0,0,0,0,1,0,0,0,0,0,3,0,1,0,1,0,0,0,1],
+            [1,0,1,1,1,1,1,1,1,1,1,1,0,1,1,1,1,1,1,1],
+            [1,3,0,0,0,1,0,0,0,3,0,0,0,1,0,0,0,0,3,1],
+            [1,1,1,1,0,0,0,1,1,1,1,1,0,0,0,1,1,1,1,1],
+            [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+        ];
+
+        const miniMapScale = 200 / (20 * 6);
+        const walls = [], objectives = [];
+
+        mazeLayout.forEach((row, z) => {
+            row.forEach((cell, x) => {
+                const posX = x * 6; const posZ = z * 6;
+                if (cell === 1) {
+                    const wall = new THREE.Mesh(new THREE.BoxGeometry(6, 8, 6), new THREE.MeshStandardMaterial({ color: 0x2a2a2a }));
+                    wall.position.set(posX, 4, posZ); scene.add(wall); walls.push(wall);
+                    const wUI = document.createElement('div'); wUI.className='wall-ui'; 
+                    wUI.style.width=(6*miniMapScale)+'px'; wUI.style.height=(6*miniMapScale)+'px';
+                    wUI.style.left=(posX*miniMapScale)+'px'; wUI.style.top=(posZ*miniMapScale)+'px';
+                    document.getElementById('minimap').appendChild(wUI);
+                } else if (cell === 3) {
+                    const obj = new THREE.Mesh(new THREE.SphereGeometry(0.5), new THREE.MeshBasicMaterial({ color: 0xffff00 }));
+                    obj.position.set(posX, 1, posZ); scene.add(obj); 
+                    const objUI = document.createElement('div'); objUI.className='obj-ui';
+                    objUI.style.left=(posX*miniMapScale + 1) + 'px'; objUI.style.top=(posZ*miniMapScale + 1) + 'px';
+                    document.getElementById('minimap').appendChild(objUI);
+                    objectives.push({ mesh: obj, ui: objUI });
+                } else if (cell === 2) { camera.position.set(posX, 1.8, posZ); }
+            });
+        });
+
+        scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+        const flashlight = new THREE.SpotLight(0xffffff, 0, 80, Math.PI/4, 0.5);
+        scene.add(flashlight); scene.add(flashlight.target);
+
+        
+        // --- GHOST SYSTEM (GHOST MODEL UPGRADE) ---
+        const ghosts = [0xff0000, 0xff00ff, 0x00ffff, 0xffaa00, 0x00ff00].map((col, i) => {
+            // Kita buat Group untuk menyatukan badan dan kepala hantu
+            const ghostGroup = new THREE.Group();
+
+            // Badan (Kerucut/Cone) - Seperti jubah melayang
+            const bodyGeom = new THREE.ConeGeometry(1, 2.5, 8);
+            const bodyMat = new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.5 });
+            const body = new THREE.Mesh(bodyGeom, bodyMat);
+            body.rotation.x = Math.PI; // Balik kerucutnya biar lancip di bawah
+            ghostGroup.add(body);
+
+            // Kepala (Bola Kecil)
+            const headGeom = new THREE.SphereGeometry(0.5, 16, 16);
+            const headMat = new THREE.MeshBasicMaterial({ color: col });
+            const head = new THREE.Mesh(headGeom, headMat);
+            head.position.y = 1.2; // Taruh di atas badan
+            ghostGroup.add(head);
+            
+            // Spawn awal harus jauh
+            resetGhostPosition(ghostGroup);
+            
+            scene.add(ghostGroup);
+            const light = new THREE.PointLight(col, 50, 15); scene.add(light);
+            
+            return { 
+                mesh: ghostGroup, // Sekarang mesh merujuk ke Group
+                light, 
+                speed: 0.08 + (i * 0.005), 
+                active: true, 
+                respawnTime: 0 
+            };
+        });
+
+        function resetGhostPosition(ghostMesh) {
+            let validPos = false;
+            let rx, rz;
+            while (!validPos) {
+                rx = Math.random() * 110;
+                rz = Math.random() * 110;
+                const distToPlayer = new THREE.Vector2(rx, rz).distanceTo(new THREE.Vector2(camera.position.x, camera.position.z));
+                if (distToPlayer > 40) validPos = true;
+            }
+            ghostMesh.position.set(rx, 1.5, rz);
+        }
+
+        function canMoveTo(nx, nz) {
+            const r = 1.0; 
+            for (let w of walls) {
+                if (Math.abs(nx - w.position.x) < 3 + r && Math.abs(nz - w.position.z) < 3 + r) return false;
+            }
+            return true;
+        }
+
+        let keys = {};
+        window.onkeydown=(e)=>{ 
+            keys[e.code]=true; 
+            if(gameStarted && e.code==='KeyF' && document.pointerLockElement) {
+                if (!flashlightOn && energy > 10) { flashlightOn = true; playClick(); }
+                else { flashlightOn = false; playClick(); }
+            }
+        };
+        window.onkeyup=(e)=>keys[e.code]=false;
+        
+        let yaw=0, pitch=0;
+        window.onmousemove=(e)=>{ if(document.pointerLockElement){ yaw -= e.movementX * 0.002; pitch -= e.movementY * 0.002; pitch = Math.max(-Math.PI/2.2, Math.min(Math.PI/2.2, pitch)); } };
+        
+        document.getElementById('btn-start').onclick = () => { 
+            initAudio(); 
+            gameStarted = true; 
+            document.getElementById('start-screen').style.display = 'none'; 
+            document.body.requestPointerLock(); 
+        };
+
+        // Pause Detection
+        document.addEventListener('pointerlockchange', () => {
+            if (!document.pointerLockElement && gameStarted && !isDead) {
+                document.getElementById('pause-screen').style.display = 'flex';
+            } else {
+                document.getElementById('pause-screen').style.display = 'none';
+            }
+        });
+
+        document.addEventListener('mousedown', () => {
+            if (gameStarted && !isDead && !document.pointerLockElement) {
+                document.body.requestPointerLock();
+            }
+        });
+
+        function animate() {
+            if (isDead) return;
+            requestAnimationFrame(animate);
+
+            // --- SMART PAUSE LOGIC ---
+            if (gameStarted && !document.pointerLockElement) return;
+            if (!gameStarted) { renderer.render(scene, camera); return; }
+
+            camera.rotation.set(pitch + (Math.random()-0.5)*shakeAmount, yaw + (Math.random()-0.5)*shakeAmount, 0, 'YXZ');
+            const pDir = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);
+            const sDir = new THREE.Vector3(1,0,0).applyQuaternion(camera.quaternion);
+            
+            const ms = 0.14;
+            let nx = camera.position.x, nz = camera.position.z;
+            if(keys['KeyW']) { nx += pDir.x*ms; nz += pDir.z*ms; }
+            if(keys['KeyS']) { nx -= pDir.x*ms; nz -= pDir.z*ms; }
+            if(keys['KeyA']) { nx -= sDir.x*ms; nz -= sDir.z*ms; }
+            if(keys['KeyD']) { nx += sDir.x*ms; nz += sDir.z*ms; }
+            if (canMoveTo(nx, camera.position.z)) camera.position.x = nx;
+            if (canMoveTo(camera.position.x, nz)) camera.position.z = nz;
+
+            flashlight.position.copy(camera.position);
+            flashlight.target.position.copy(camera.position).add(pDir);
+
+            if (flashlightOn) { 
+                energy -= 0.45; 
+                if (energy <= 0) { energy = 0; flashlightOn = false; playClick(); }
+            } else if (energy < 100) {
+                energy += 0.25; 
+            }
+
+            flashlight.intensity = flashlightOn ? 300 : 0;
+            const bBar = document.getElementById('battery-bar');
+            bBar.style.width = energy + "%";
+            bBar.style.backgroundColor = energy < 25 ? "#ff0000" : "#00ff00";
+
+            // Ghosts Logic
+            let minD = 100;
+            ghosts.forEach(g => {
+                if (g.active) {
+                    // Bikin hantu selalu nengok ke kamera (biar serem!)
+                    g.mesh.lookAt(camera.position.x, 1.5, camera.position.z);
+                    
+                    g.mesh.position.addScaledVector(new THREE.Vector3().subVectors(camera.position, g.mesh.position).normalize(), g.speed);
+                    g.light.position.copy(g.mesh.position);
+                    const d = camera.position.distanceTo(g.mesh.position);
+                    if (d < minD) minD = d;
+                    if (flashlightOn && d < 25 && pDir.dot(new THREE.Vector3().subVectors(g.mesh.position, camera.position).normalize()) > 0.88) {
+                        g.active = false; g.mesh.scale.set(0,0,0); g.light.intensity = 0; 
+                        g.respawnTime = Date.now() + 5000;
+                        resetGhostPosition(g.mesh);
+                    }
+                    if (d < 1.7) { isDead = true; playScream(); document.exitPointerLock(); document.getElementById('death-screen').style.display = 'flex';  }
+                } else if (Date.now() > g.respawnTime) { 
+                    g.active = true; g.mesh.scale.set(1,1,1); g.light.intensity = 40; 
+                }
+            });
+
+            if (minD < 25) {
+                playHeart(Math.min(1.0, (25 - minD) / 18), Math.max(0.12, minD / 35));
+                shakeAmount = (25 - minD) * 0.007;
+                scene.background = new THREE.Color(minD < 8 ? 0x220000 : 0x1a1a1a);
+            } else {
+                shakeAmount = 0; scene.background = new THREE.Color(0x1a1a1a);
+            }
+
+            objectives.forEach((obj, i) => {
+                if(camera.position.distanceTo(obj.mesh.position) < 1.8) {
+                    scene.remove(obj.mesh); obj.ui.remove(); objectives.splice(i, 1);
+                    score++; document.getElementById('score').innerText = `INTI: ${score}/10`;
+                }
+            // Cek kemenangan
+                if (score >= 10) {
+                    isDead = true; 
+                    document.exitPointerLock();
+
+                    // EFEK DISKO KEMENANGAN
+                    const partyColors = [0xff0000, 0x00ff00, 0x0000ff, 0xffff00, 0xff00ff, 0x00ffff];
+                    let colorIndex = 0;
+                    
+                    // Kita bikin interval biar lampu ganti-ganti warna tiap 100ms
+                    const discoInterval = setInterval(() => {
+                        const randomColor = partyColors[colorIndex % partyColors.length];
+                        scene.background = new THREE.Color(randomColor);
+                        scene.fog.color = new THREE.Color(randomColor);
+                        colorIndex++;
+                    }, 100);
+
+                    const ds = document.getElementById('death-screen');
+                    ds.style.backgroundColor = "rgba(0, 0, 0, 0.7)"; 
+                    ds.innerHTML = `
+                        <h1 style="animation: pulseGlow 0.5s infinite; color: #00ff00;">SELAMAT BANG!</h1>
+                        <p style="font-size: 20px;">MISI TELAH SELESAI!<br>
+                        Para setan telah menghilang untuk sementara!<br>
+                        Silahkan ambil molenmu 🥐 di indomaret terdekat!</p>
+                        <button onclick="location.reload()">MAIN LAGI😊</button>
+                    `;
+                    ds.style.display = 'flex';
+                    
+                    // Jangan lupa bunyikan suara "asik" tadi berkali-kali!
+                    for(let j=0; j<5; j++) {
+                        setTimeout(() => playScream(), j * 200);
+                    }
+                }
+            });
+
+            document.getElementById('p-dot').style.left = (camera.position.x * miniMapScale - 2) + 'px';
+            document.getElementById('p-dot').style.top = (camera.position.z * miniMapScale - 2) + 'px';
+            renderer.render(scene, camera);
+        }
+        animate();
+    </script>
+</body>
+</html>
